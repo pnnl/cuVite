@@ -1,0 +1,167 @@
+*************
+-------------
+ COMPILATION
+-------------
+*************
+
+Pass -DDEBUG_PRINTF if detailed diagonostics is required along
+program run. This program requires OpenMP and C++11 support,
+so pass -fopenmp (for g++)/-qopenmp (for icpc) and -std=c++11/
+-std=c++0x. For Cray systems, use CC.
+
+Pass -DUSE_32_BIT_GRAPH if number of nodes in the graph are 
+within 32-bit range (2 x 10^9), else 64-bit range is assumed.
+
+Pass -DDONT_CREATE_DIAG_FILES if you dont want to create 2 files
+per process with detail diagonostics.
+
+Upon building, the program will generate two binaries:
+bin/graphClustering (parallel) and bin/fileConvert (serial).
+
+Please use bin/fileConvert for input graph conversion from 
+native formats to a binary format that bin/graphClustering will
+be able to read. 
+
+Compiling on Intel KNL:
+
+We made some modifications to the code to port it to Cray XC systems 
+with Intel KNL. We use lib-memkind to allocate some heavily used data 
+structures to KNL MCDRAM (for usage in flat-mode). 
+Please ensure lib-memkind module is loaded and pass 
+-DUSE_AUTOHBW_MEMALLOC, and pass -xmic-AVX512 instead of -xHost in 
+the Makefile.
+
+cmake build option:
+
+$ mkdir build install
+$ cd build
+$ cmake ../ -DCMAKE_INSTALL_PREFIX=~/vite-gpu/install -DCMAKE_C_COMPILER=mpicc -DCMAKE_CXX_COMPILER=mpicxx
+$ make -j4
+$ make install
+
+*******************
+-------------------
+ GRAPH CONVERSION
+-------------------
+*******************
+
+The file format of cuVite is compatible with Vite, so please see Vite 
+README for information on binary file conversion from the various native
+formats.
+https://github.com/Exa-Graph/vite/blob/master/README
+
+
+***********************
+-----------------------
+ EXECUTING THE PROGRAM
+-----------------------
+***********************
+
+0. Input file conversion to Vite binary format from the respective native 
+file formats: convert the input file to binary format using fileConvert.
+
+1. Set the desired number of processes and threads.  
+
+2. Run distributed parallel Louvain algorithm (graphClustering binary) 
+using the binary file created in Step #0:
+
+mpiexec -n 2 bin/./graphClustering -c -i -f karate.bin
+
+Possible options (can be combined):
+
+1. -c <ncolors>  : Enable coloring, adjacent vertices are processed
+                   in different order. Synchronization happens once
+                   per <ncolors>.
+2. -d <ncolors>  : Enable coloring, adjacent vertices are processes
+                   in different order. No synchronization.
+3. -i            : Threshold cycling, threshold changes dynamically
+                   in every phase of Louvain algorithm.
+4. -t 1          : If a vertex is in the same community for past 3
+                   iterations, then consider it inactive.
+5. -t 3          : If a vertex is in the same community for past 3
+                   iterations, then consider it inactive. Also,
+                   adds a communication step to gather inactive 
+                   vertices and terminate Louvain if >= 90% vertices
+                   at an iteration are inactive.
+6. -t 2 -a <0-1> : Early termination* using probability alpha.
+7. -t 4 -a <0-1> : Early termination* using probability alpha. Also,
+                   adds a communication step to gather inactive 
+                   vertices and terminate Louvain if >= 90% vertices
+                   at an iteration are inactive.
+8. -b            : Only valid for real-world inputs. Attempts to 
+                   distribute approximately equal number of edges among 
+                   processes. Irregular number of vertices owned by a 
+                   particular process. Increases the distributed graph 
+                   creation time due to serial overheads, but may 
+                   significantly improve the overall execution time.
+9. -o            : Output communities into a file. This option will result 
+                   in Vite dumping the communities (community-per-vertex in 
+                   each line, total number of lines == number of vertices) 
+                   in a text file named <input-binary-file>.communities in 
+                   the same path as the input binary file.
+10. -r <nranks>  : This is used to control the number of aggregators in MPI 
+                   I/O and is meaningful when an input binary graph file is 
+                   passed with option "-f".
+                   naggr := (nranks > 1) ? (nprocs/nranks) : nranks;
+11. -g <gfile>   : Pass a ground truth file for community comparison. We 
+                   expect the ground truth file to contain N lines (equal to 
+                   the total #vertices in the graph), while each line containing 
+                   a distinct vertex ID and associated community ID, separated by 
+                   a space or tab. Ground truth community comparison is performed
+                   in a single node, and it uses OpenMP to parallelize. It may take
+                   a substantial amount of time for large files.
+12. -z           : Only applicable if "-g <gfile>" option is passed. This tells us
+                   that the passed ground truth file is 1-based. If this option is
+                   not passed, we assume the ground truth to the 0-based.
+
+*Note: Option to update inactive vertices percentage is defined as
+macro ET_CUTOFF in louvain.hpp, and the default is 2%.
+
+**********************************************
+----------------------------------------------
+ COMPARING COMMUNITIES WITH GROUND TRUTH DATA
+----------------------------------------------
+**********************************************
+
+1. Generate benchmark graphs with ground truth
+community information. For e.g., we have tested
+with LFR benchmark. 
+(https://sites.google.com/site/santofortunato/inthepress2)
+LFR generates an edge list (index 1-based), along with community
+membership of each vertex.
+
+2. Convert the generated network to binary using 
+fileConvert binary. 
+
+3. Execute the program as shown in the e.g. below:
+mpiexec -n 2 bin/./graphClustering -r 1 -f lfrtest.bin -z -g community.dat
+
+The difference between standard way to execute the program and this way
+is that one needs to pass the ground truth vertex-community mapping 
+using the "-g" option. Also, the "-z" option tells the program that
+the input ground truth file -- `community.dat` is 1-based. If "-z" is
+not passed, then we assume that the file is 0-based.
+
+We return some statistics such as F-score, Gini-coefficient, 
+false positives/negatives and true positives. We expect that the isolated
+vertices will be placed into their respective communities, and not into 
+a single one.
+
+However, extra communication per phase is required when these metrics
+are to be computed, so the program execution time will increase
+significantly. Plus, the community comparison part is currently
+multithreaded (uses OpenMP), so everything is brought to a single 
+node/PE and then communities are compared. 
+
+***************
+---------------
+ OUTPUT RESULT
+---------------
+***************
+
+If -DDONT_CREATE_DIAG_FILES is passed during compilation,
+then output is send to stdout.
+Otherwise, the output result is dumped per process on files 
+named as dat.out.<process-id>. Check dat.out.0 to review 
+program diagonostics. 
+Output files are cleared with: `make clean`.

@@ -1,0 +1,179 @@
+cmake_minimum_required(VERSION 3.8)
+project(graphClustering)
+
+option( DEFINE_RUNONGPU "Use of GPU" ON)
+IF( DEFINE_RUNONGPU )
+     MESSAGE( "GPU code enabled with CUDA" )
+     FIND_PACKAGE(CUDA)
+     ADD_DEFINITIONS( -DRUNONGPU=1 )
+ENDIF( DEFINE_RUNONGPU )
+
+set_property(GLOBAL PROPERTY ALLOW_DUPLICATE_CUSTOM_TARGETS 1)
+
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+cmake_minimum_required( VERSION 3.8 )
+
+# Include cmake modules
+list( APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake" )
+
+# Project options
+option( BUILD_SHARED_LIBS
+        "Build shared libraries instead of static libraries."
+        OFF )
+option( OPTION_SELF_CONTAINED
+        "Create a self-contained install with all dependencies."
+        OFF )
+option( OPTION_BUILD_TESTS
+        "Build tests."
+        ON )
+option( OPTION_BUILD_DOCS
+        "Build documentation."
+        OFF )
+option( OPTION_BUILD_EXAMPLES
+        "Build examples."
+        OFF )
+
+find_package(MPI REQUIRED)
+include_directories(${MPI_C_INCLUDE_PATH})
+
+find_package(OpenMP REQUIRED)
+
+if(${CMAKE_CXX_COMPILER_ID} STREQUAL "Clang")
+    set(CLANG 1)
+endif()
+if(${CMAKE_CXX_COMPILER_ID} STREQUAL "Intel")
+    set(INTEL_CXX 1)
+endif()
+
+if(${CMAKE_CXX_COMPILER_ID} STREQUAL "GNU")
+    set(GCC 1)
+endif()
+
+set(POWER 1)
+
+if(INTEL_CXX)
+    add_definitions(-xhost)
+elseif(POWER)
+    # IBM Power9
+    option(ENABLE_ALTIVEC "Enable ALTIVEC profiling instrumentation" ON)
+    if(ENABLE_ALTIVEC)
+        add_definitions(-DHAVE_ALTIVEC=1 -maltivec -mabi=altivec)
+        add_definitions(-flax-vector-conversions -fpermissive)
+    else()
+        add_definitions(-DHAVE_ALTIVEC=0)
+    endif()
+
+    option(CPU_POWER9 "Enable CPU POWER9 profiling instrumentation" ON)
+    if(CPU_POWER9)
+        add_definitions(-mcpu=power9 -mtune=power9 -DX265_ARCH_POWER9=1)
+        add_definitions(-DDONT_CREATE_DIAG_FILES)
+        #add_definitions(-DUSE_32_BIT_GRAPH)
+    endif()
+else()
+    add_definitions(-march=native)
+    #add_definitions(-DUSE_32_BIT_GRAPH)
+endif()
+
+set( CMAKE_CXX_STANDARD 11 )
+
+set( CMAKE_BUILD_TYPE Release)
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Debug)
+endif()
+
+set(CMAKE_CXX_FLAGS_DEBUG "-g")
+set(CMAKE_CXX_FLAGS_RELEASE "-O3")
+
+set( CMAKE_C_COMPILER mpicc )
+set( CMAKE_CXX_COMPILER mpicxx )
+
+set( VITE_COMPILE_MACRO_FLAGS -DDONT_CREATE_DIAG_FILES #-DDEBUG_PRINTF -DCHECK_COLORING_CONFLICTS
+)
+
+set( CMAKE_CXX_FLAGS
+      ### for Intel compilers use option below
+      #"${CMAKE_CXX_FLAGS} -xHost ${OpenMP_CXX_FLAGS} ${VITE_COMPILE_MACRO_FLAGS} ${MPI_COMPILE_FLAGS}"
+      ### for gcc compilers use option below
+      "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS} ${VITE_COMPILE_MACRO_FLAGS} ${MPI_COMPILE_FLAGS}"
+)
+
+
+set(CMAKE_CXX_LINK_FLAGS ${CMAKE_CXX_LINK_FLAGS} ${MPI_LINK_FLAGS})
+# just in case, make use of CMAKE_EXE_LINKER_FLAGS
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS} -lm")
+
+set ( FILE_CONVERTER_FOLDER converters)
+add_subdirectory( ${FILE_CONVERTER_FOLDER} )
+
+set( TARGET_GRAPH_CLUSTERING  graphClustering )
+
+IF( DEFINE_RUNONGPU )
+
+set(CUDA_SEPARABLE_COMPILATION ON)
+CUDA_ADD_LIBRARY( cuda_louvain STATIC
+  louvain_cuda.cu
+  modularity.cu
+  GpuGraph.cu
+  #louvain_cuda_coreutils.cu
+  #louvain_cuda_utils.cu
+  OPTIONS -arch sm_70
+      -gencode=arch=compute_70,code=sm_70
+  #-arch=sm_70
+    #-rdc=true
+    -std=c++11
+    --ptxas-options=-v
+    -Xcompiler -fopenmp
+    #-Xcompiler -qsmp=omp
+    -Xcompiler -fpermissive
+    -Xcompiler -mcpu=power9
+    -Xcompiler -mtune=power9
+    #-Xcompiler -qthreaded
+    #DEBUG -g -G
+)
+
+target_link_libraries( cuda_louvain ${CUDA_LIBRARIES} )
+target_compile_definitions(cuda_louvain PUBLIC USE_CUDA=1)
+ENDIF( DEFINE_RUNONGPU )
+
+add_executable( ${TARGET_GRAPH_CLUSTERING}
+        ${CMAKE_SOURCE_DIR}/main.cpp
+        ${CMAKE_SOURCE_DIR}/coloring.cpp
+        ${CMAKE_SOURCE_DIR}/compare.cpp
+        ${CMAKE_SOURCE_DIR}/distgraph.cpp
+        ${CMAKE_SOURCE_DIR}/louvain.cpp
+        ${CMAKE_SOURCE_DIR}/rebuild.cpp
+)
+
+IF( DEFINE_RUNONGPU )
+target_link_libraries(${TARGET_GRAPH_CLUSTERING}
+        cuda_louvain
+)
+ENDIF( DEFINE_RUNONGPU )
+
+include_directories(SYSTEM ${CMAKE_SOURCE_DIR} ${MPI_INCLUDE_PATH})
+
+IF( DEFINE_RUNONGPU )
+install( TARGETS
+        cuda_louvain
+        DESTINATION lib
+)
+ENDIF( DEFINE_RUNONGPU )
+
+install( TARGETS
+        ${TARGET_GRAPH_CLUSTERING}
+        DESTINATION bin
+)
+
+install( FILES
+        ${CMAKE_SOURCE_DIR}/coloring.hpp
+        ${CMAKE_SOURCE_DIR}/compare.hpp
+        ${CMAKE_SOURCE_DIR}/distgraph.hpp
+        ${CMAKE_SOURCE_DIR}/edge.hpp
+        ${CMAKE_SOURCE_DIR}/graph.hpp
+        ${CMAKE_SOURCE_DIR}/locks.hpp
+        ${CMAKE_SOURCE_DIR}/louvain.hpp
+        ${CMAKE_SOURCE_DIR}/rebuild.hpp
+        ${CMAKE_SOURCE_DIR}/utils.hpp
+        DESTINATION include
+)
