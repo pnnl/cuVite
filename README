@@ -15,23 +15,11 @@ within 32-bit range (2 x 10^9), else 64-bit range is assumed.
 Pass -DDONT_CREATE_DIAG_FILES if you dont want to create 2 files
 per process with detail diagonostics.
 
-Upon building, the program will generate two binaries:
-bin/graphClustering (parallel) and bin/fileConvert (serial).
+Upon building, the program will generate a binary file named 
+`graphClustering`.
 
-Please use bin/fileConvert for input graph conversion from 
-native formats to a binary format that bin/graphClustering will
-be able to read. 
 
-Compiling on Intel KNL:
-
-We made some modifications to the code to port it to Cray XC systems 
-with Intel KNL. We use lib-memkind to allocate some heavily used data 
-structures to KNL MCDRAM (for usage in flat-mode). 
-Please ensure lib-memkind module is loaded and pass 
--DUSE_AUTOHBW_MEMALLOC, and pass -xmic-AVX512 instead of -xHost in 
-the Makefile.
-
-cmake build option:
+Cmake build option:
 
 $ mkdir build install
 $ cd build
@@ -50,6 +38,7 @@ README for information on binary file conversion from the various native
 formats.
 https://github.com/Exa-Graph/vite/blob/master/README
 
+Also, see above for comparing communities with a ground-truth.
 
 ***********************
 -----------------------
@@ -117,41 +106,9 @@ Possible options (can be combined):
 *Note: Option to update inactive vertices percentage is defined as
 macro ET_CUTOFF in louvain.hpp, and the default is 2%.
 
-**********************************************
-----------------------------------------------
- COMPARING COMMUNITIES WITH GROUND TRUTH DATA
-----------------------------------------------
-**********************************************
-
-1. Generate benchmark graphs with ground truth
-community information. For e.g., we have tested
-with LFR benchmark. 
-(https://sites.google.com/site/santofortunato/inthepress2)
-LFR generates an edge list (index 1-based), along with community
-membership of each vertex.
-
-2. Convert the generated network to binary using 
-fileConvert binary. 
-
-3. Execute the program as shown in the e.g. below:
-mpiexec -n 2 bin/./graphClustering -r 1 -f lfrtest.bin -z -g community.dat
-
-The difference between standard way to execute the program and this way
-is that one needs to pass the ground truth vertex-community mapping 
-using the "-g" option. Also, the "-z" option tells the program that
-the input ground truth file -- `community.dat` is 1-based. If "-z" is
-not passed, then we assume that the file is 0-based.
-
-We return some statistics such as F-score, Gini-coefficient, 
-false positives/negatives and true positives. We expect that the isolated
-vertices will be placed into their respective communities, and not into 
-a single one.
-
-However, extra communication per phase is required when these metrics
-are to be computed, so the program execution time will increase
-significantly. Plus, the community comparison part is currently
-multithreaded (uses OpenMP), so everything is brought to a single 
-node/PE and then communities are compared. 
+*Note: Only the default version has been ported on GPUs, most of the 
+heuristics mentioned above will only work for the CPU-only version.
+See Vite: https://github.com/Exa-Graph/vite/blob/master/README
 
 ***************
 ---------------
